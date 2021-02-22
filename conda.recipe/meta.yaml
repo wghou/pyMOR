@@ -1,0 +1,36 @@
+package:
+  name: pymor
+  version: 0.0.1
+
+source:
+  path: ..
+
+build:
+  number: 0
+  script: python -m pip install . -vvv
+
+requirements:
+  build:
+    - "{{ compiler('cxx') }}"
+    - cmake
+    - ninja
+
+  host:
+    - python
+    - pip
+
+  run:
+    - python
+
+
+test:
+  imports:
+    - pymor
+  source_files:
+    - tests
+  commands:
+    - python tests/test.py
+
+about:
+  summary: python interface of MOR built with pybind11.
+  license_file: LICENSE
