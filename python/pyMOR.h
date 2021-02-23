@@ -1,8 +1,7 @@
 #ifndef __PY_ELASTIC_FORCE_FEM_H
 #define __PY_ELASTIC_FORCE_FEM_H
 
-#include "ProjUtils/ProjDynMeshSampler.h"
-#include "ProjUtils/ProjDynUtil.h"
+#include "ProjDynMeshSampler2.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/eigen.h>
@@ -33,13 +32,71 @@ class pyMOR
         }
         m_massMatrix = PDSparseMatrix(m_positions.rows(), m_positions.rows());
         m_massMatrix.setFromTriplets(massEntries.begin(), massEntries.end());
+
+        std::cout<< "Info: there are " << m_positions.rows() << " vertices and " 
+                << m_triangles.rows() << " facets and " 
+                << m_tetrahedrons.rows() << " tets." << std::endl; 
+    }
+
+    pyMOR(PDPositions x, PDVectori cells)
+    {
+        m_positions = x;
+        std::vector<int> face, tet;
+
+        for(int i=0; i < cells.rows(); i++)
+        {
+            if(cells.row(i).x() == 3)
+            {
+                for(int j=0; j<3; j++) face.push_back(cells.row(++i).x());
+            }
+            else if(cells.row(i).x() == 4)
+            {
+                for(int j=0; j<4; j++) tet.push_back(cells.row(++i).x());
+            }
+            else
+            {
+                throw std::runtime_error("Error: cannot extract face and tet from cells correctly!");
+                return;
+            }
+        }
+
+        m_triangles.resize(face.size() / 3, 3);
+        for(int i=0; i<face.size() / 3; i++)
+        {
+            m_triangles.row(i)(0) = face[i*3 + 0];
+            m_triangles.row(i)(1) = face[i*3 + 1];
+            m_triangles.row(i)(2) = face[i*3 + 2];
+        }
+        m_tetrahedrons.resize(tet.size() / 4, 4);
+        for(int i=0; i<tet.size() / 4; i++)
+        {
+            m_tetrahedrons.row(i)(0) = tet[i*4 + 0];
+            m_tetrahedrons.row(i)(1) = tet[i*4 + 1];
+            m_tetrahedrons.row(i)(2) = tet[i*4 + 2];
+            m_tetrahedrons.row(i)(3) = tet[i*4 + 3];
+        }
+
+        m_sampler.init(m_positions, m_triangles, m_tetrahedrons);
+
+        PDVector m_vertexMasses = vertexMasses(m_tetrahedrons, m_positions);
+        std::vector<Eigen::Triplet<PDScalar>> massEntries;
+        massEntries.reserve(m_positions.rows());
+        for (int v = 0; v < m_positions.rows(); v++) {
+            massEntries.push_back(Eigen::Triplet<PDScalar>(v, v, m_vertexMasses(v)));
+        }
+        m_massMatrix = PDSparseMatrix(m_positions.rows(), m_positions.rows());
+        m_massMatrix.setFromTriplets(massEntries.begin(), massEntries.end());
+
+        std::cout<< "Info: there are " << m_positions.rows() << " vertices and " 
+                << m_triangles.rows() << " facets and " 
+                << m_tetrahedrons.rows() << " tets." << std::endl; 
     }
 
     virtual ~pyMOR() {}
 
     public:
     // step 2: create skinning space
-    std::vector<unsigned int> createSkinningSpace(int numSamples)
+    std::vector<unsigned int> createSkinningSpace(unsigned int numSamples)
     {
         // 选取采样
         m_samples = m_sampler.getSamples(numSamples);
@@ -51,13 +108,16 @@ class pyMOR
         PDScalar furthestDist = m_sampler.getSampleDiameter(m_samples);
 	    PDScalar r = furthestDist * m_baseFunctionRadius;
 
-        m_baseFunctionWeights = m_sampler.getRadialBaseFunctions(m_samples, r, false);
+        m_baseFunctionWeights1 = m_sampler.getRadialBaseFunctions(m_samples, r, false);
+        m_baseFunctionWeights2 = m_sampler.getRadialBaseFunctions(m_samples, r, true);
 
         bool isFlat = false;
 		if (m_positions.col(2).norm() < 1e-10) isFlat = true;
-        m_baseFunctions = internalCreateSkinningSpace(m_positions, m_baseFunctionWeights, isFlat);
+        m_baseFunctions = internalCreateSkinningSpace(m_positions, m_baseFunctionWeights1, isFlat);
+        m_baseFunctions2 = internalCreateSkinningSpace(m_positions, m_baseFunctionWeights2, isFlat);
 
         m_baseFunctionsTransposed = m_baseFunctions.transpose();
+        m_baseFunctionsTransposed2 = m_baseFunctions2.transpose();
 
         return m_samples;
     }
@@ -67,8 +127,8 @@ class pyMOR
     {
         PDMatrix L = m_baseFunctionsTransposed * m_massMatrix * m_baseFunctions;
 		m_subspaceSolver.compute(L);
-        PDPositions rhs = m_baseFunctionsTransposed * m_massMatrix * pos;
-        m_positionsSubspace.resize(m_baseFunctionsTransposed.rows(), 3);
+        PDPositions rhs = m_baseFunctionsTransposed2 * m_massMatrix * pos;
+        m_positionsSubspace.resize(m_baseFunctionsTransposed2.rows(), 3);
         for (int d = 0; d < 3; d++) {
             m_positionsSubspace.col(d) = m_subspaceSolver.solve(rhs.col(d));
         }
@@ -125,6 +185,7 @@ class pyMOR
 		return skinningSpace;
 	}
 
+
     PDVector vertexMasses(PDTets& tets, PDPositions& positions) {
 		PDVector vMasses(positions.rows());
 		vMasses.fill(0);
@@ -148,25 +209,30 @@ class pyMOR
 	}
 
     private:
-        // 模型网格初始位置
+    // 模型网格初始位置
     PDPositions m_positions;
     PDTriangles m_triangles;
     PDTets m_tetrahedrons;
 
-    // 子空间
-    ProjDynMeshSampler m_sampler;
-    std::vector< unsigned int > m_samples;
     PDPositions m_positionsSubspace;
 
-    // 参数
-    PDScalar m_baseFunctionRadius = 1.1; // The larger this number, the larger the support of the base functions.
+    std::vector< unsigned int > m_samples;
+
+    std::vector<bool> m_vertexIndicator;
+
     PDSparseMatrix m_massMatrix;
-    PDMatrix m_baseFunctionWeights;
+    PDMatrix m_baseFunctionWeights1;
+    PDMatrix m_baseFunctionWeights2;
 
     PDMatrix m_baseFunctions;
 	PDMatrix m_baseFunctionsTransposed;
- 
-    Eigen::LLT<PDMatrix> m_subspaceSolver;  
+    PDMatrix m_baseFunctions2;
+	PDMatrix m_baseFunctionsTransposed2;
+
+    PDScalar m_baseFunctionRadius = 1.1; // The larger this number, the larger the support of the base functions.
+    Eigen::LLT<PDMatrix> m_subspaceSolver;
+
+    ProjDynMeshSampler2 m_sampler; 
 };
 
 #endif

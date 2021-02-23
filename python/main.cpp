@@ -19,6 +19,7 @@ PYBIND11_MODULE(pymor, m) {
 
     py::class_<pyMOR>(m, "MOR")
         .def(py::init<PDPositions, PDTriangles, PDTets>())
+        .def(py::init<PDPositions, PDVectori>())
         .def("createSkinningSpace", &pyMOR::createSkinningSpace)
         .def("projectToSubspace", &pyMOR::projectToSubspace)
         .def("projectFromSubspace", &pyMOR::projectFromSubspace);

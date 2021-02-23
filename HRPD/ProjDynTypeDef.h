@@ -38,6 +38,7 @@ namespace PD {
 	template <int rows, int cols>
 		using PDMatrixF = Eigen::Matrix<PDScalar, rows, cols>;
 	typedef Eigen::Matrix<PDScalar, -1, 1> PDVector;
+	typedef Eigen::Matrix<int, -1, 1> PDVectori;
 	typedef Eigen::Matrix<PDScalar, 3, 1> PD3dVector;
 	typedef Eigen::Matrix<PDScalar, 2, 1> PD2dVector;
 	typedef Eigen::Matrix<PDScalar, -1, -1> PDMatrix;
